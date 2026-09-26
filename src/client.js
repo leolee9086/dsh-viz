@@ -69,12 +69,23 @@ const S = {
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: 8 },
   img: { width: '100%', height: 'auto', borderRadius: 8, display: 'block', border: '1px solid ' + T.line },
 }
-/** 安全读入参：解析不出就当没有。 */
+/** 安全读入参：解析不出就当没有。
+ *
+ * 认两种形态：
+ *   1) 直调 —— 参数就在顶层：{ kind, items, ... }
+ *   2) 经 call_tool 转发 —— 真正的参数在 arguments 里：
+ *      { tool_name: 'viz_show', arguments: { kind, items, ... } }
+ * 第二种不是异常：本会话只暴露 find_tools / call_tool 这几个元工具，
+ * 工具都是被转发调用的，卡片必须认得出转发形态，否则会渲染成一张空卡。
+ */
 function readArgs(block) {
   if (!block || typeof block.argsRaw !== 'string' || block.argsRaw === '') return null
   try {
     const parsed = JSON.parse(block.argsRaw)
-    return parsed && typeof parsed === 'object' ? parsed : null
+    if (!parsed || typeof parsed !== 'object') return null
+    const inner = parsed.arguments
+    if (parsed.tool_name === 'viz_show' && inner && typeof inner === 'object') return inner
+    return parsed
   } catch {
     return null
   }
