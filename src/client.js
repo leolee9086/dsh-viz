@@ -69,19 +69,17 @@ const S = {
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: 8 },
   img: { width: '100%', height: 'auto', borderRadius: 8, display: 'block', border: '1px solid ' + T.line },
 }
-/** 安全读入参：解析不出就当没有。
+/** 参数文本 -> 参数对象。解析不出就当没有。
  *
- * 认两种形态：
+ * 纯函数，与阶段无关。两种形态都认：
  *   1) 直调 —— 参数就在顶层：{ kind, items, ... }
- *   2) 经 call_tool 转发 —— 真正的参数在 arguments 里：
+ *   2) 经 call_tool 转发 —— 真正的参数在 arguments 下：
  *      { tool_name: 'viz_show', arguments: { kind, items, ... } }
- * 第二种不是异常：本会话只暴露 find_tools / call_tool 这几个元工具，
- * 工具都是被转发调用的，卡片必须认得出转发形态，否则会渲染成一张空卡。
  */
-function readArgs(block) {
-  if (!block || typeof block.argsRaw !== 'string' || block.argsRaw === '') return null
+function parseArgsText(raw) {
+  if (typeof raw !== 'string' || raw === '') return null
   try {
-    const parsed = JSON.parse(block.argsRaw)
+    const parsed = JSON.parse(raw)
     if (!parsed || typeof parsed !== 'object') return null
     const inner = parsed.arguments
     if (parsed.tool_name === 'viz_show' && inner && typeof inner === 'object') return inner
@@ -89,6 +87,23 @@ function readArgs(block) {
   } catch {
     return null
   }
+}
+
+/** 安全读入参：解析不出就当没有。
+ *
+ * 参数在哪个字段，由这次调用处在哪个阶段决定（见 ui-tool 的 ToolCallPhaseProps）：
+ *   phase 'start'（运行中）block 是 StartedToolCall，参数在 block.argsRaw；
+ *   phase 'result'（已结算）block 是 ToolResultNode，**它自己没有 argsRaw**，
+ *   参数在 block.call.argsRaw。
+ * 卡片大多在「已结算」时才渲染，所以第二种才是常态——只读 block.argsRaw
+ * 会永远拿到 undefined，渲染成一张空卡。
+ */
+function readArgs(block) {
+  if (!block) return null
+  const raw = typeof block.argsRaw === 'string'
+    ? block.argsRaw
+    : (block.call && typeof block.call.argsRaw === 'string' ? block.call.argsRaw : '')
+  return parseArgsText(raw)
 }
 
 /** 工具结果里的一句话摘要。 */
