@@ -1,6 +1,6 @@
 {
   "name": "dsh-viz",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "DeepSeek Harness 双位置可视化：完整原位工具图表、会话级右栏集合与多选对比。基于可追踪的 viz_show 工具记录，支持时间线、关系网、日历与图册。",
   "author": "逐暝 (leolee9086)",

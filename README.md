@@ -9,13 +9,13 @@ DeepSeek Harness 双位置可视化插件：**工具卡里保留完整图表，�
 桌面版请使用 **Electron 应用内的插件管理器**，安装地址：
 
 ```text
-https://github.com/leolee9086/dsh-viz#v0.2.0
+https://github.com/leolee9086/dsh-viz#v0.2.1
 ```
 
 非桌面 profile 可使用官方 CLI（把 `<name>` 换成对应 profile）：
 
 ```sh
-dsh plugin --profile <name> add 'https://github.com/leolee9086/dsh-viz#v0.2.0'
+dsh plugin --profile <name> add 'https://github.com/leolee9086/dsh-viz#v0.2.1'
 ```
 
 不要在 profile 目录手工运行 `pnpm add` 或改组合来代替管理器。desktop profile 由 Electron 管理，CLI 会拒绝操作。安装后刷新页面；若管理器要求重载/重启，按其提示操作。仓库包含构建产物，不需要使用者编译客户端。
@@ -26,7 +26,7 @@ dsh plugin --profile <name> add 'https://github.com/leolee9086/dsh-viz#v0.2.0'
 2. 当前会话的新成功图表调用会自动打开右栏；历史重放不自动打开，后台会话不抢当前右栏。
 3. 点击会话标题栏的「图表」或工具卡的「加入对比」，打开本会话集合。
 4. 勾选多张图，选择自适应、上下或并排布局。时间线可通过底部滑块或滚轮缩放。
-5. 「来源记录」显示调用 ID、事件序号、根调用 ID（若有）和原始图表数据。
+5. 点击图表下的「回到工具卡」，展开原生折叠组并定位到该调用；「来源记录」仍可查看调用 ID、事件序号、根调用 ID（若有）和原始数据。
 6. 如果提示还有历史未载入，点击「载入更早的图表」。它会通过正式会话分页接口向前加载到起点；大会话可能需要较长时间。
 
 ## 数据与生命周期
@@ -63,12 +63,14 @@ dsh plugin --profile <name> add 'https://github.com/leolee9086/dsh-viz#v0.2.0'
 
 ## 当前边界与验收状态
 
-- **精确跳回 Chat 工具卡尚未实现。** 已核对的安装版 `0.1.7-rc.2` 没有已验证的公开定位接缝。来源记录可查看，但没有用轨迹页冒充回跳，也没有扫描/修改宿主 DOM。
+- **来源回跳使用小范围兼容桥。** 已核对安装版 `0.1.7-rc.2` 的会话/工具卡标记，以及原生 `beforematch` 展开处理器。只读扫描当前会话的 `data-chat-call-id`，从外向内触发原生展开，再 `scrollIntoView` 定位。插件不增删节点、不改属性/样式、不替换 Chat、不读 React fiber。
+- 回跳需要当前打开此会话的聊天视图；不自动从轨迹页切换。历史不足时使用正式 `loadThrough` 分页接口，PTC 仍精确匹配子调用、不以根调用冒充成功。新定位、会话切换或卸载会取消旧定位。分页后最多等待两秒的投影/展开提交；失败显示具体原因，不无限扫描。
+- DOM 标记和 `beforematch` 是内部兼容接缝，不是稳定公开导航契约；宿主升级后若接缝变化，回跳会明确失败。`v0.2.1` 已通过来源序号与禁止 DOM 改写的逻辑/静态测试、构建；**实际安装后的点击回跳仍需验收**，本次未追加浏览器交互测试。
 - 图表内容只读，可缩放、悬停、比较，不能直接编辑原始调用数据。
 - 本地图片必须先有浏览器可访问的 URL；`option` 不接受可执行 JavaScript 回调字符串。
 - 同时勾选很多复杂图会增加浏览器内存和绘制成本；可以减少选择或使用上下布局。
 - 已完成纯事件目录测试，以及真实 React 图表组件的视觉/交互验证（包括实际旧版 19 镜分镜数据、两处独立缩放、原位卸载、比较布局、错误隔离与 resize）。这**不是已安装 DSH 的集成验收**。
-- `v0.2.0` 为待宿主验收版本；实际插件管理器安装、正式插槽挂载、自动打开和跨会话行为由安装后验证。
+- `v0.2.1` 为待宿主验收版本；实际插件管理器安装、正式插槽挂载、自动打开和跨会话行为由安装后验证。
 
 ## 开发
 
@@ -86,6 +88,7 @@ pnpm run build:preview -- /path/to/storyboard.html
 - [会话目录纯逻辑](<src/catalog.js>)
 - [右栏视图与正式插槽注册](<src/sidebar.js>)
 - [目录测试](<test/catalog.test.js>)
+- [来源回跳兼容桥](<src/reveal.js>) / [来源解析与边界检查](<test/reveal.test.js>)
 - [真实组件预览](<test/preview.js>) / [预览构建](<test/build-preview.mjs>) / [Playwright 检查函数](<test/preview-check.js>)
 
 预览只验证组件，不伪造 Cordis `ctx`，也不启动替代 DSH 服务。预览产物与本地业务样本不会进入发布包。

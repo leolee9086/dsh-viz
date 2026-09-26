@@ -1,5 +1,6 @@
 import React from 'react'
 import { createCatalog } from './catalog.js'
+import { createSourceRevealer } from './reveal.js'
 
 const h = React.createElement
 const TAB = 'dsh-viz:catalog'
@@ -10,7 +11,7 @@ function button(label, onClick, extra = {}) {
   return h('button', { type: 'button', style: buttonStyle, onClick, ...extra }, label)
 }
 
-/** 注册公开的服务/插槽，不导入 DSH 功能实现，不接触 Chat DOM。 */
+/** 正式插槽承载 UI；来源回跳只读查询 Chat 标记并触发原生展开，不改 DOM。 */
 export function registerCatalogUI(ctx, { VizChart, VizView, toolKeys }) {
   const states = new Map() // 用 binding 对象而非 sessionId，避免重连复用已销毁的会话代。
   let disposed = false
@@ -28,7 +29,13 @@ export function registerCatalogUI(ctx, { VizChart, VizView, toolKeys }) {
     if (existing) return existing
     const catalog = createCatalog(binding.sessionId)
     catalog.update(binding.eventSource.getSnapshot())
-    const state = { catalog, stop: null }
+    const revealer = createSourceRevealer({ binding,
+      isCurrent: () => !disposed && ctx.sessions.binding(binding.sessionId) === binding &&
+        ctx.sidebarRight.mounted.getSnapshot() === binding.sessionId })
+    const stopMounted = ctx.sidebarRight.mounted.subscribe(() => {
+      if (ctx.sidebarRight.mounted.getSnapshot() !== binding.sessionId) revealer.cancel()
+    })
+    const state = { catalog, revealer, stop: null }
     states.set(binding, state)
     const stopEvents = binding.eventSource.subscribe(() => {
       const news = catalog.update(binding.eventSource.getSnapshot(), true)
@@ -43,6 +50,8 @@ export function registerCatalogUI(ctx, { VizChart, VizView, toolKeys }) {
       if (released) return
       released = true
       stopEvents()
+      stopMounted()
+      revealer.dispose()
       catalog.dispose()
       states.delete(binding)
     }
@@ -51,10 +60,15 @@ export function registerCatalogUI(ctx, { VizChart, VizView, toolKeys }) {
   }
   function injected(sessionId) {
     const binding = ctx.sessions.binding(sessionId)
-    const { catalog } = stateFor(binding)
+    const { catalog, revealer } = stateFor(binding)
     return {
       hooks: { vizCatalog: catalog },
       openViz: id => open(binding, id),
+      revealChart: id => {
+        const record = catalog.getSnapshot().records.find(r => r.callId === id)
+        if (!record) return Promise.reject(new Error('图表已不在当前会话记录中。'))
+        return revealer.reveal(record)
+      },
       selectChart: (id, checked) => catalog.select(id, checked),
       selectAllCharts: checked => catalog.selectAll(checked),
       setChartLayout: value => catalog.setLayout(value),
@@ -97,8 +111,21 @@ export function registerCatalogUI(ctx, { VizChart, VizView, toolKeys }) {
 }
 
 /** 纯视图：生产插槽和视觉测试共用，不需要伪造宿主服务。 */
-export function CatalogPanel({ VizChart, useVizCatalog, selectChart, selectAllCharts, setChartLayout, loadChartHistory }) {
+export function CatalogPanel({ VizChart, useVizCatalog, selectChart, selectAllCharts, setChartLayout, loadChartHistory, revealChart }) {
     const state = useVizCatalog(s => s)
+    const [jump, setJump] = React.useState({ id: null, busy: false, error: '', message: '' })
+    const request = React.useRef(0)
+    React.useEffect(() => () => { request.current++ }, [])
+    async function reveal(id) {
+      const token = ++request.current
+      setJump({ id, busy: true, error: '', message: '' })
+      try {
+        await revealChart(id)
+        if (token === request.current) setJump({ id, busy: false, error: '', message: '已定位到原位工具卡。' })
+      } catch (error) {
+        if (token === request.current) setJump({ id, busy: false, error: String(error.message ?? error), message: '' })
+      }
+    }
     const selected = new Set(state.selected)
     const shown = state.records.filter(r => selected.has(r.callId))
     const columns = state.layout === 'one' ? 'minmax(0, 1fr)' : state.layout === 'two'
@@ -136,12 +163,18 @@ export function CatalogPanel({ VizChart, useVizCatalog, selectChart, selectAllCh
     h('div', { style: { display: 'grid', gridTemplateColumns: columns, gap: 14, alignItems: 'start' } },
       shown.map(record => h('article', { key: record.callId, 'data-dsh-viz-chart': record.callId, style: { minWidth: 0 } },
         h(VizChart, { spec: record.spec, settled: record.status !== 'running', summary: record.summary }),
+        revealChart ? button(jump.id === record.callId && jump.busy ? '正在定位…' : '回到工具卡',
+          () => reveal(record.callId), { disabled: jump.id === record.callId && jump.busy,
+            style: { ...buttonStyle, marginTop: 6 } }) : null,
+        jump.id === record.callId && (jump.error || jump.message) ? h('p', {
+          role: jump.error ? 'alert' : 'status', style: { fontSize: 12, margin: '6px 0' },
+        }, jump.error || jump.message) : null,
         record.status === 'error' ? h('p', { role: 'alert', style: { fontSize: 12 } }, '调用失败，以上仅显示其输入数据：' + record.summary) : null,
         h('details', { style: { marginTop: 6, fontSize: 12 } },
           h('summary', { style: { cursor: 'pointer' } }, `来源记录 · #${record.sourceSeq}`),
           h('p', null, '调用 ID：', h('code', null, record.callId)),
           record.rootCallId && record.rootCallId !== record.callId ? h('p', null, '根调用：', h('code', null, record.rootCallId)) : null,
-          h('p', null, '当前宿主未提供已验证的 Chat 精确定位接口；这里显示真实来源记录，不跳转到轨迹页冒充定位。'),
+          h('p', null, '回跳只读定位当前会话的工具卡，并调用宿主原生折叠展开与滚动；不会跳到轨迹页。'),
           h('pre', { style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 260, overflow: 'auto' } }, JSON.stringify(record.spec, null, 2)),
         ),
       )),
