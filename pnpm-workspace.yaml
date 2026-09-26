@@ -1,0 +1,4 @@
+# pnpm 11 起，构建脚本白名单从 package.json 的 pnpm 字段搬到了这里。
+# esbuild 需要跑它的安装脚本才算装好。
+onlyBuiltDependencies:
+  - esbuild

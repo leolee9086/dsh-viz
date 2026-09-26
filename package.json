@@ -1,0 +1,51 @@
+{
+  "name": "dsh-viz",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DeepSeek Harness 可视化卡面：把数据画成会话里的一张图。宿主侧提供 viz_show 工具，浏览器侧认领它的专属工具卡，用 ECharts 与 vis-network 渲染时间线、关系网、日历、图册等。",
+  "author": "逐暝 (leolee9086)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/leolee9086/dsh-viz.git"
+  },
+  "homepage": "https://github.com/leolee9086/dsh-viz#readme",
+  "bugs": {
+    "url": "https://github.com/leolee9086/dsh-viz/issues"
+  },
+  "type": "module",
+  "license": "MIT",
+  "main": "./lib/host.js",
+  "exports": {
+    ".": "./lib/host.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node ./scripts/build.mjs",
+    "prepack": "pnpm run build"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": []
+    }
+  },
+  "devDependencies": {
+    "@esbuild/win32-x64": "0.28.2",
+    "echarts": "^5.6.0",
+    "esbuild": "^0.28.2",
+    "vis-network": "^9.1.13"
+  }
+}
