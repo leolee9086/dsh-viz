@@ -1,8 +1,8 @@
 {
   "name": "dsh-viz",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "DeepSeek Harness 可视化卡面：把数据画成会话里的一张图。宿主侧提供 viz_show 工具，浏览器侧认领它的专属工具卡，用 ECharts 与 vis-network 渲染时间线、关系网、日历、图册等。",
+  "description": "DeepSeek Harness 双位置可视化：完整原位工具图表、会话级右栏集合与多选对比。基于可追踪的 viz_show 工具记录，支持时间线、关系网、日历与图册。",
   "author": "逐暝 (leolee9086)",
   "repository": {
     "type": "git",
@@ -28,7 +28,9 @@
   ],
   "scripts": {
     "build": "node ./scripts/build.mjs",
-    "prepack": "pnpm run build"
+    "test": "node --test test/*.test.js",
+    "build:preview": "node test/build-preview.mjs",
+    "prepack": "node --test test/*.test.js && node scripts/build.mjs"
   },
   "engines": {
     "node": ">=22.19.0"
@@ -46,6 +48,8 @@
     "@esbuild/win32-x64": "0.28.2",
     "echarts": "^5.6.0",
     "esbuild": "^0.28.2",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "vis-network": "^9.1.13"
   }
 }

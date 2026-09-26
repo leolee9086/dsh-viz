@@ -1,43 +1,93 @@
 # dsh-viz
 
-DeepSeek Harness 的可视化卡面插件：**把数据画成会话里的一张图**。
+DeepSeek Harness 双位置可视化插件：**工具卡里保留完整图表，右侧栏集中查看和比较。**
 
-宿主侧注册一个 `viz_show` 工具；浏览器侧认领它的专属工具卡，用 ECharts 与 vis-network 把这次调用的参数渲染出来。
+宿主注册 `viz_show`；客户端用同一套 ECharts / vis-network 渲染器绘制两处图表。两处各自持有实例，缩放、选择和卸载互不影响。
 
-## 装
+## 安装 / 更新
 
-在 DSH Web profile 目录（默认 `~/.dsh/profiles/web`）：
+桌面版请使用 **Electron 应用内的插件管理器**，安装地址：
 
-```sh
-pnpm add dsh-viz
+```text
+https://github.com/leolee9086/dsh-viz#v0.2.0
 ```
 
-本包在 `package.json` 里声明了 `dsh.bundle.patch`，所以它能作为 profile 的一层被装进去。
+非桌面 profile 可使用官方 CLI（把 `<name>` 换成对应 profile）：
 
-## 支持哪些视图
+```sh
+dsh plugin --profile <name> add 'https://github.com/leolee9086/dsh-viz#v0.2.0'
+```
 
-| kind | 用来画 | 需要给的字段 |
+不要在 profile 目录手工运行 `pnpm add` 或改组合来代替管理器。desktop profile 由 Electron 管理，CLI 会拒绝操作。安装后刷新页面；若管理器要求重载/重启，按其提示操作。仓库包含构建产物，不需要使用者编译客户端。
+
+## 怎么用
+
+1. 调用 `viz_show`，展开工具卡仍然看到**完整图表**，而不是摘要入口。
+2. 当前会话的新成功图表调用会自动打开右栏；历史重放不自动打开，后台会话不抢当前右栏。
+3. 点击会话标题栏的「图表」或工具卡的「加入对比」，打开本会话集合。
+4. 勾选多张图，选择自适应、上下或并排布局。时间线可通过底部滑块或滚轮缩放。
+5. 「来源记录」显示调用 ID、事件序号、根调用 ID（若有）和原始图表数据。
+6. 如果提示还有历史未载入，点击「载入更早的图表」。它会通过正式会话分页接口向前加载到起点；大会话可能需要较长时间。
+
+## 数据与生命周期
+
+- 图表内容的事实来源是持久化的工具调用参数，不是工具卡 DOM、全局变量或右栏导航参数。
+- 目录从会话事件窗口恢复，识别直接调用和 PTC 网关子调用，外层网关不重复计数。
+- 身份为 `sessionId + callId`。失败记录保留但不触发自动打开；替换/补页记录不会当成新结果。
+- 事件订阅与会话绑定，而非某张工具卡的挂载。工具组隐藏、原位卡卸载，不影响已打开右栏的图表。
+- 选择与布局保留在当前会话绑定的生命周期内；刷新或释放会话后，目录重新从日志恢复，默认选择最新图表。
+- 客户端按需加载历史不等于把全部历史重新塞进模型上下文。工具参数可追踪，也不等于压缩后永久留在模型活跃上下文中。
+
+## 支持的视图
+
+| kind | 用途 | 数据字段 |
 |---|---|---|
-| `timeline` | 时间线 / 甘特（分镜表、日程、排期） | `items[] = { label, start, end, group, note }` |
-| `network` | 关系网（人物关系、依赖图） | `nodes[]`、`edges[]` |
+| `timeline` | 时间线 / 泳道甘特、分镜和排期 | `items[] = { label, start, end, group, note }` |
+| `network` | 关系网 | `nodes[]`、`edges[]` |
 | `calendar` | 日历热力 | `items[] = { date, value }` |
-| `echarts` | 任意原生 ECharts 图表 | `option`（直接给 ECharts option） |
-| `gallery` | 图册 | `images[]`（http(s) 地址） |
+| `echarts` | 原生 ECharts 图表 | JSON 格式 `option` |
+| `gallery` | 图册 | `images[]`，浏览器可访问的图片 URL |
 
-时间写法都能吃：`"0:05"`、`"1:02:03"`、纯秒数、`"2026-09-26 01:00"`。
+时间支持纯秒数、`"0:05"`、`"1:02:03"`、ISO / 日期串。
 
-## 已知边界
+```json
+{
+  "kind": "timeline",
+  "title": "分镜排期",
+  "items": [
+    { "label": "S01", "start": "0:00", "end": "0:05", "group": "场一", "note": "近景" },
+    { "label": "S02", "start": "0:05", "end": "0:10", "group": "场一", "note": "切到中景" }
+  ]
+}
+```
 
-- `gallery` 目前只认 http(s) 地址；本地文件要先有可访问的 URL。
-- 卡片是只读的：能看、能悬停看细节，不能在里面改数据。
-- 客户端文件由 web server 原样下发，**不是 ESM**；两个可视化库在构建时被内联进 `lib/client.js`。
+## 当前边界与验收状态
+
+- **精确跳回 Chat 工具卡尚未实现。** 已核对的安装版 `0.1.7-rc.2` 没有已验证的公开定位接缝。来源记录可查看，但没有用轨迹页冒充回跳，也没有扫描/修改宿主 DOM。
+- 图表内容只读，可缩放、悬停、比较，不能直接编辑原始调用数据。
+- 本地图片必须先有浏览器可访问的 URL；`option` 不接受可执行 JavaScript 回调字符串。
+- 同时勾选很多复杂图会增加浏览器内存和绘制成本；可以减少选择或使用上下布局。
+- 已完成纯事件目录测试，以及真实 React 图表组件的视觉/交互验证（包括实际旧版 19 镜分镜数据、两处独立缩放、原位卸载、比较布局、错误隔离与 resize）。这**不是已安装 DSH 的集成验收**。
+- `v0.2.0` 为待宿主验收版本；实际插件管理器安装、正式插槽挂载、自动打开和跨会话行为由安装后验证。
 
 ## 开发
 
 ```sh
 pnpm install
-pnpm run build      # scripts/build.mjs：校验 src/client.js，把库内联后写到 lib/
+pnpm test
+pnpm run build
+pnpm run build:preview
+# 可选：用含静态 shots 数组的 19 镜分镜 HTML 作为预览输入
+pnpm run build:preview -- /path/to/storyboard.html
 ```
 
-改浏览器侧（`src/client.js`）→ 刷新页面即可。
-改宿主侧（`src/host.js`）→ 必须重启 DSH。
+源码与测试：
+- [客户端与完整图表渲染](<src/client.js>)
+- [会话目录纯逻辑](<src/catalog.js>)
+- [右栏视图与正式插槽注册](<src/sidebar.js>)
+- [目录测试](<test/catalog.test.js>)
+- [真实组件预览](<test/preview.js>) / [预览构建](<test/build-preview.mjs>) / [Playwright 检查函数](<test/preview-check.js>)
+
+预览只验证组件，不伪造 Cordis `ctx`，也不启动替代 DSH 服务。预览产物与本地业务样本不会进入发布包。
+
+客户端构建为平台 `__ModuleLoader__` 工厂，React 由平台提供，ECharts / vis-network 内联。React / React DOM 的开发依赖仅用于独立组件测试。改源码后先构建，再用官方管理器更新；仅刷新页面不会把项目里的新文件复制到已安装包中。

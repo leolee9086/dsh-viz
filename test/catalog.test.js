@@ -1,0 +1,91 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { createCatalog, readArgs, parseArgsText } from '../src/catalog.js'
+
+const spec = { kind: 'timeline', title: '19 镜头', items: Array.from({ length: 19 }, (_, i) => ({ label: String(i + 1), start: String(i * 5), end: String(i * 5 + 5) })) }
+const entry = (seq, type, data) => ({ type: 'durable', event: { seq, time: seq * 1000, type, data } })
+const call = (id, seq = 1, args = spec) => entry(seq, 'tool/call', { callId: id, name: 'viz_show', arguments: JSON.stringify(args), turn: 1 })
+const result = (id, seq = 2, isError = false) => entry(seq, 'tool/result', { message: { source: { callId: id }, content: [{ type: 'text', text: 'ok' }], isError } })
+const child = (id, seq = 2, isError = false) => entry(seq, 'tool/ptc-dispatch', { subCallId: id, rootCallId: 'gateway', parentCallId: 'gateway', name: 'viz_show', arguments: spec, content: [], isError })
+const window = (entries, kind = 'replace', hasMore = false) => ({ entries, hasMore, change: { kind, entries } })
+
+test('工具卡继续读取运行中、结算后和网关转发形态', () => {
+  assert.deepEqual(readArgs({ argsRaw: JSON.stringify(spec) }), spec)
+  assert.deepEqual(readArgs({ kind: 'tool-result', call: { argsRaw: JSON.stringify(spec) } }), spec)
+  assert.deepEqual(parseArgsText(JSON.stringify({ tool_name: 'viz_show', arguments: spec })), spec)
+  assert.equal(parseArgsText('{'), null)
+  assert.equal(parseArgsText('[]'), null)
+})
+test('冷会话重放恢复完整 19 项，不当作新图表', () => {
+  const c = createCatalog('one')
+  assert.deepEqual(c.update(window([call('a'), result('a')])), [])
+  const r = c.getSnapshot().records[0]
+  assert.equal(r.spec.items.length, 19)
+  assert.equal(r.status, 'complete')
+  assert.equal(r.sessionId, 'one')
+  assert.equal(r.sourceSeq, 1)
+  assert.equal(r.resultSeq, 2)
+})
+test('实时完成通知一次，不在开始、重复通知或历史恢复时打开', () => {
+  const c = createCatalog('one')
+  assert.equal(c.update(window([call('a')], 'append'), true).length, 0)
+  assert.equal(c.update(window([result('a')], 'append'), true).length, 1)
+  assert.equal(c.update(window([result('a')], 'append'), true).length, 0)
+  assert.equal(c.update(window([call('a'), result('a')], 'replace'), true).length, 0)
+})
+test('不采集外层 gateway 重复图表；真实 PTC 子调用无需 start 也能恢复', () => {
+  const c = createCatalog('one')
+  const outer = entry(1, 'tool/call', { callId: 'gateway', name: 'call_tool', arguments: JSON.stringify({ tool_name: 'viz_show', arguments: spec }) })
+  c.update(window([outer, child('a')]))
+  assert.equal(c.getSnapshot().records.length, 1)
+  assert.equal(c.getSnapshot().records[0].rootCallId, 'gateway')
+})
+test('PTC 开始和结果合并一个身份，并保留开始事件序号', () => {
+  const c = createCatalog('one')
+  const start = entry(1, 'tool/ptc-dispatch-start', { subCallId: 'a', rootCallId: 'g', name: 'viz_show', arguments: spec })
+  c.update(window([start]))
+  const news = c.update(window([child('a')], 'append'), true)
+  assert.equal(news.length, 1)
+  assert.equal(c.getSnapshot().records.length, 1)
+  assert.equal(news[0].sourceSeq, 1)
+})
+test('失败及无效 spec 留下可追踪记录但不自动打开', () => {
+  const c = createCatalog('one')
+  c.update(window([call('a'), call('b', 2, { kind: 'unknown' })]))
+  assert.deepEqual(c.update(window([result('a', 3, true), result('b', 4)], 'append'), true), [])
+  assert.equal(c.getSnapshot().records[0].status, 'error')
+  assert.equal(c.getSnapshot().records[1].invalid, true)
+})
+test('多选、布局跨侧栏卸载保留，空选择不会被新历史偷偷恢复', () => {
+  const c = createCatalog('one')
+  c.update(window([call('a'), result('a'), call('b', 3), result('b', 4)]))
+  c.select('a'); c.select('b'); c.setLayout('two')
+  assert.deepEqual(c.getSnapshot().selected.sort(), ['a', 'b'])
+  c.selectAll(false)
+  c.update(window([call('a'), result('a'), call('b', 3), result('b', 4)]))
+  assert.deepEqual(c.getSnapshot().selected, [])
+  assert.equal(c.getSnapshot().layout, 'two')
+})
+test('补页重建早于结果的调用；历史覆盖删除失效选择', () => {
+  const c = createCatalog('one')
+  c.update(window([result('a')], 'replace', true))
+  assert.equal(c.getSnapshot().records.length, 0)
+  assert.deepEqual(c.update(window([call('a'), result('a')], 'prepend'), true), [])
+  assert.equal(c.getSnapshot().records[0].status, 'complete')
+  c.select('a')
+  c.update(window([]))
+  assert.deepEqual(c.getSnapshot().selected, [])
+})
+test('会话隔离和订阅清理；无关事件不重画', () => {
+  const a = createCatalog('a'), b = createCatalog('b')
+  let hits = 0
+  const stop = a.subscribe(() => hits++)
+  a.update(window([call('same'), result('same')]))
+  const snap = a.getSnapshot()
+  a.update(window([entry(3, 'assistant/live-chunk', {})], 'append'), true)
+  assert.equal(a.getSnapshot(), snap)
+  assert.equal(b.getSnapshot().records.length, 0)
+  assert.equal(hits, 1)
+  stop(); a.selectAll(false); assert.equal(hits, 1)
+  a.dispose()
+})

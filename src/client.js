@@ -16,7 +16,10 @@ import React from 'react'
 import * as echarts from 'echarts'
 import { Network } from 'vis-network'
 
-export const inject = ['slots']
+import { readArgs, readSummary } from './catalog.js'
+import { registerCatalogUI } from './sidebar.js'
+
+export const inject = ['slots', 'sessions', 'uiSession', 'sidebarRight', 'sidebarRightTabs', 'layout']
 
 /** 本包认领的工具名。 */
 const KEYS = ['viz_show']
@@ -69,52 +72,8 @@ const S = {
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: 8 },
   img: { width: '100%', height: 'auto', borderRadius: 8, display: 'block', border: '1px solid ' + T.line },
 }
-/** 参数文本 -> 参数对象。解析不出就当没有。
- *
- * 纯函数，与阶段无关。两种形态都认：
- *   1) 直调 —— 参数就在顶层：{ kind, items, ... }
- *   2) 经 call_tool 转发 —— 真正的参数在 arguments 下：
- *      { tool_name: 'viz_show', arguments: { kind, items, ... } }
- */
-function parseArgsText(raw) {
-  if (typeof raw !== 'string' || raw === '') return null
-  try {
-    const parsed = JSON.parse(raw)
-    if (!parsed || typeof parsed !== 'object') return null
-    const inner = parsed.arguments
-    if (parsed.tool_name === 'viz_show' && inner && typeof inner === 'object') return inner
-    return parsed
-  } catch {
-    return null
-  }
-}
-
-/** 安全读入参：解析不出就当没有。
- *
- * 参数在哪个字段，由这次调用处在哪个阶段决定（见 ui-tool 的 ToolCallPhaseProps）：
- *   phase 'start'（运行中）block 是 StartedToolCall，参数在 block.argsRaw；
- *   phase 'result'（已结算）block 是 ToolResultNode，**它自己没有 argsRaw**，
- *   参数在 block.call.argsRaw。
- * 卡片大多在「已结算」时才渲染，所以第二种才是常态——只读 block.argsRaw
- * 会永远拿到 undefined，渲染成一张空卡。
- */
-function readArgs(block) {
-  if (!block) return null
-  const raw = typeof block.argsRaw === 'string'
-    ? block.argsRaw
-    : (block.call && typeof block.call.argsRaw === 'string' ? block.call.argsRaw : '')
-  return parseArgsText(raw)
-}
-
-/** 工具结果里的一句话摘要。 */
-function readSummary(block) {
-  if (!block || block.kind !== 'tool-result') return ''
-  const content = Array.isArray(block.content) ? block.content : []
-  for (const c of content) {
-    if (c && c.type === 'text' && typeof c.text === 'string' && c.text.trim()) return c.text.trim()
-  }
-  return ''
-}
+// 参数解析与目录重放共用 catalog.js；已结算工具参数在 block.call.argsRaw。
+// 直调及 call_tool 包装形态均由同一个解析函数处理。
 
 /** 时间归一化成秒：数字当秒、"0:05"、"1:02:03"、ISO/日期串。 */
 function toSeconds(v) {
@@ -162,21 +121,28 @@ function timelineOption(spec) {
   return {
     animation: false,
     backgroundColor: 'transparent',
-    grid: { left: 8, right: 16, top: 12, bottom: 28, containLabel: true },
+    grid: { left: 8, right: 16, top: 12, bottom: 52, containLabel: true },
+    // 窄侧栏也能放大到单镜头；两处各有独立的 dataZoom 状态。
+    dataZoom: [
+      { type: 'slider', xAxisIndex: 0, filterMode: 'weakFilter', bottom: 0, height: 18, textStyle: { color: T.ink2 } },
+      { type: 'inside', xAxisIndex: 0, filterMode: 'weakFilter' },
+    ],
     tooltip: {
+      // 用 Canvas 富文本而非 HTML，镜头名/备注不会变成可执行标签。
+      renderMode: 'richText',
       formatter(p) {
         const v = p.value || []
         const span = dates
           ? new Date(v[1] * 1000).toLocaleString() + ' → ' + new Date(v[2] * 1000).toLocaleString()
           : fmtClock(v[1]) + ' → ' + fmtClock(v[2]) + '（' + (v[2] - v[1]).toFixed(2) + ' 秒）'
-        return '<b>' + (v[3] || '') + '</b><br>' + span + (p.data && p.data.note ? '<br>' + p.data.note : '')
+        return (v[3] || '') + '\n' + span + (p.data && p.data.note ? '\n' + p.data.note : '')
       },
     },
     xAxis: {
       type: 'value', min: 'dataMin', max: 'dataMax',
       axisLabel: dates
-        ? { formatter: (v) => { const d = new Date(v * 1000); return (d.getMonth() + 1) + '/' + d.getDate() } }
-        : { formatter: fmtClock },
+        ? { color: T.ink2, formatter: (v) => { const d = new Date(v * 1000); return (d.getMonth() + 1) + '/' + d.getDate() } }
+        : { color: T.ink2, formatter: fmtClock },
       splitLine: { lineStyle: { color: T.line, type: 'dashed' } },
       axisLine: { lineStyle: { color: T.line } },
     },
@@ -238,7 +204,7 @@ function calendarOption(spec) {
   return {
     animation: false,
     backgroundColor: 'transparent',
-    tooltip: { formatter: (p) => p.value[0] + '：' + p.value[1] },
+    tooltip: { renderMode: 'richText', formatter: (p) => p.value[0] + '：' + p.value[1] },
     visualMap: {
       min: 0, max: max || 1, calculable: true, orient: 'horizontal',
       left: 'center', bottom: 0, itemWidth: 12, itemHeight: 80,
@@ -266,13 +232,30 @@ function buildOption(spec) {
   return null
 }
 
+/** Canvas 不会解析 CSS var；只在自己的容器上读主题，不改宿主 DOM。 */
+function resolveCanvasColors(value, element) {
+  const css = getComputedStyle(element)
+  function visit(v) {
+    if (typeof v === 'string' && v.startsWith('var(')) {
+      const match = /^var\((--[\w-]+),\s*([^)]*)\)$/.exec(v)
+      return match ? (css.getPropertyValue(match[1]).trim() || match[2]) : v
+    }
+    if (Array.isArray(v)) return v.map(visit)
+    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([key, item]) => [key, visit(item)]))
+    return v
+  }
+  return visit(value)
+}
+
 /** ECharts 容器：跟随容器与窗口 resize，卸载时 dispose。 */
 function ChartHost({ option, height, dep }) {
   const ref = React.useRef(null)
   React.useEffect(() => {
     if (!ref.current) return undefined
     const chart = echarts.init(ref.current, null, { renderer: 'canvas' })
-    chart.setOption(option, true)
+    // setOption 可能因坏输入失败，必须在错误边界接管之前释放实例。
+    try { chart.setOption(resolveCanvasColors(option, ref.current), true) }
+    catch (error) { chart.dispose(); throw error }
     const onResize = () => chart.resize()
     window.addEventListener('resize', onResize)
     let ro = null
@@ -295,29 +278,39 @@ function NetworkHost({ nodes, edges, height, dep }) {
   const ref = React.useRef(null)
   React.useEffect(() => {
     if (!ref.current) return undefined
-    const net = new Network(
-      ref.current,
-      { nodes: nodes || [], edges: edges || [] },
-      {
-        autoResize: true,
-        physics: { stabilization: { iterations: 200 } },
-        nodes: { shape: 'dot', size: 14, font: { size: 12, color: T.ink } },
-        edges: { arrows: 'to', font: { size: 10, color: T.ink3, strokeWidth: 0 }, smooth: { type: 'continuous' } },
-        interaction: { hover: true },
-      },
-    )
+    const options = resolveCanvasColors({
+      autoResize: true,
+      physics: { stabilization: { iterations: 200 } },
+      nodes: { shape: 'dot', size: 14, font: { size: 12, color: T.ink } },
+      edges: { arrows: 'to', font: { size: 10, color: T.ink3, strokeWidth: 0 }, smooth: { type: 'continuous' } },
+      interaction: { hover: true },
+    }, ref.current)
+    // 先建立空实例，再载入业务数据；重复节点等错误也走可清理路径。
+    const net = new Network(ref.current, { nodes: [], edges: [] }, options)
+    try { net.setData({ nodes: nodes || [], edges: edges || [] }) }
+    catch (error) { net.destroy(); throw error }
     return () => net.destroy()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dep])
   return h('div', { ref, style: { width: '100%', height: (height || 360) + 'px' } })
 }
 
-/** 卡片主体：按 kind 分支。 */
-export function VizView(props) {
-  const block = props && props.block
-  const settled = !!(block && block.kind === 'tool-result')
-  const args = readArgs(block)
-  const summary = readSummary(block)
+// 某一张坏图不能打掉整个会话/对比集合；换了 spec 后边界随 key 重置。
+class ChartBoundary extends React.Component {
+  state = { error: null }
+  static getDerivedStateFromError(error) { return { error } }
+  render() {
+    return this.state.error
+      ? h('div', { role: 'alert', style: S.err }, '图表无法渲染：' + String(this.state.error.message ?? this.state.error))
+      : this.props.children
+  }
+}
+
+/** 两处共用的完整图表。每次挂载拥有自己的画布，互不搬运 DOM。 */
+export function VizChart(props) {
+  return h(ChartBoundary, { key: JSON.stringify(props.spec) }, h(ChartBody, props))
+}
+function ChartBody({ spec: args, settled = true, summary = '', actions = null }) {
   const kind = args && args.kind ? String(args.kind) : ''
   const title = (args && args.title) || ''
   const subtitle = (args && args.subtitle) || ''
@@ -358,19 +351,26 @@ export function VizView(props) {
       h('span', { style: S.title }, title || '可视化'),
       subtitle ? h('span', { style: S.sub }, subtitle) : null,
       headExtra ? h('span', { style: { ...S.sub, marginLeft: 'auto', flex: 'none' } }, headExtra) : null,
+      actions,
     ),
     h('div', { style: S.body }, body),
   )
 }
 
-/** 给每个认领的工具名挂同一张卡。 */
+/** 原位图表不退化为入口：绘图之上只增加“加入对比”动作。 */
+export function VizView({ block, callId, openViz }) {
+  const spec = readArgs(block)
+  return h('div', { 'data-dsh-viz-inline': callId },
+    h(VizChart, {
+      spec, settled: block?.kind === 'tool-result', summary: readSummary(block),
+      actions: openViz && spec ? h('button', {
+        type: 'button', onClick: () => openViz(callId),
+        style: { flex: 'none', cursor: 'pointer', color: T.accent, background: 'transparent', border: 0 },
+      }, '加入对比') : null,
+    }))
+}
+
+/** 目录的事件订阅先于两处视图建立；工具卡隐藏不会阻断采集。 */
 export function apply(ctx) {
-  const stops = []
-  for (const key of KEYS) {
-    stops.push(ctx.slots.inject('tool.call.toolview', () =>
-      ctx.slots.register({ name: 'tool.call.toolview', key }, VizView)))
-  }
-  return function dispose() {
-    for (const stop of stops) { if (typeof stop === 'function') stop() }
-  }
+  return registerCatalogUI(ctx, { VizChart, VizView, toolKeys: KEYS })
 }
